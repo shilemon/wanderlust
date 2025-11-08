@@ -201,3 +201,6 @@ See the <a href="./LICENSE">LICENSE</a> file for details.</p>
 <blockquote>
   ✨ <em>“Wanderlust — Because every great journey deserves a great app.”</em>
 </blockquote>
+
+<img width="1902" height="779" alt="image" src="https://github.com/user-attachments/assets/70672fd8-f424-4ec7-969f-a4570754191d" />
+
