@@ -1,218 +1,119 @@
-name: CI/CD Pipeline
+name: CI/CD — Build on Server & Deploy
 
 on:
   push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
-
-env:
-  DOCKER_USERNAME: emon110852
-  BACKEND_IMAGE: emon110852/wanderlust-backend
-  FRONTEND_IMAGE: emon110852/wanderlust-frontend
+    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
-  test:
-    name: Run Tests
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    # ✅ Setup Node.js for Backend (safe cache)
-    - name: Set up Node.js (backend)
-      uses: actions/setup-node@v4
-      with:
-        node-version: 18
-        cache: 'npm'
-        # This won't fail if file is missing
-        cache-dependency-path: |
-          backend/package-lock.json
-          backend/package.json
-
-    - name: Install backend dependencies
-      working-directory: ./backend
-      run: |
-        if [ -f package-lock.json ]; then
-          npm ci
-        else
-          npm install
-        fi
-
-    - name: Run backend tests
-      working-directory: ./backend
-      run: npm test --if-present
-
-    - name: Lint backend
-      working-directory: ./backend
-      run: npm run lint --if-present
-
-    # ✅ Setup Node.js for Frontend (safe cache)
-    - name: Set up Node.js (frontend)
-      uses: actions/setup-node@v4
-      with:
-        node-version: 18
-        cache: 'npm'
-        cache-dependency-path: |
-          frontend/package-lock.json
-          frontend/package.json
-
-    - name: Install frontend dependencies
-      working-directory: ./frontend
-      run: |
-        if [ -f package-lock.json ]; then
-          npm ci
-        else
-          npm install
-        fi
-
-    - name: Run frontend tests
-      working-directory: ./frontend
-      run: npm test --if-present
-
-    - name: Lint frontend
-      working-directory: ./frontend
-      run: npm run lint --if-present
-
-  build-and-push:
-    name: Build and Push Docker Images
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Login to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ env.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-
-    - name: Build and push backend image
-      uses: docker/build-push-action@v5
-      with:
-        context: ./backend
-        file: ./backend/Dockerfile
-        push: true
-        tags: |
-          ${{ env.BACKEND_IMAGE }}:latest
-          ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-        cache-from: type=registry,ref=${{ env.BACKEND_IMAGE }}:latest
-        cache-to: type=inline
-
-    - name: Build and push frontend image
-      uses: docker/build-push-action@v5
-      with:
-        context: ./frontend
-        file: ./frontend/Dockerfile
-        push: true
-        tags: |
-          ${{ env.FRONTEND_IMAGE }}:latest
-          ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-        cache-from: type=registry,ref=${{ env.FRONTEND_IMAGE }}:latest
-        cache-to: type=inline
-
   deploy:
-    name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: build-and-push
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Copy files to server
-      uses: appleboy/scp-action@v0.1.7
-      with:
-        host: ${{ secrets.SERVER_HOST }}
-        username: ${{ secrets.SERVER_USER }}
-        key: ${{ secrets.SERVER_SSH_KEY }}
-        port: ${{ secrets.SERVER_PORT || 22 }}
-        source: "docker-compose.yml,nginx.conf"
-        target: "/opt/wanderlust"
+      # Optional: validate compose syntax locally before copying
+      - name: Validate Compose file
+        run: |
+          docker --version
+          docker compose version || true
+          docker compose config -q
 
-    - name: Deploy application
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.SERVER_HOST }}
-        username: ${{ secrets.SERVER_USER }}
-        key: ${{ secrets.SERVER_SSH_KEY }}
-        port: ${{ secrets.SERVER_PORT || 22 }}
-        script: |
-          cd /opt/wanderlust
-          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
-          docker pull ${{ env.BACKEND_IMAGE }}:latest
-          docker pull ${{ env.FRONTEND_IMAGE }}:latest
-          docker-compose down
-          docker-compose up -d
-          docker image prune -af
-          docker-compose ps
+      # Ensure target directory exists (user-writable path avoids /opt permission issues)
+      - name: Prepare server directory
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}            # plain IP/hostname (e.g., 47.129.14.241)
+          username: ${{ secrets.SERVER_USER }}        # e.g., ubuntu
+          key: ${{ secrets.SERVER_SSH_KEY }}          # private key content
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            set -e
+            mkdir -p "/home/${{ secrets.SERVER_USER }}/wanderlust"
 
-    - name: Health check
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.SERVER_HOST }}
-        username: ${{ secrets.SERVER_USER }}
-        key: ${{ secrets.SERVER_SSH_KEY }}
-        port: ${{ secrets.SERVER_PORT || 22 }}
-        script: |
-          echo "Waiting for services to start..."
-          sleep 15
-          if [ $(docker-compose -f /opt/wanderlust/docker-compose.yml ps -q | wc -l) -eq 0 ]; then
-            echo "No containers are running!"
-            exit 1
-          fi
-          if curl -f http://localhost/api/health 2>/dev/null; then
-            echo "✓ Deployment successful!"
-          else
-            echo "✗ Health check failed"
-            docker-compose -f /opt/wanderlust/docker-compose.yml logs --tail=50
-            exit 1
-          fi
+      # Copy only what the server needs to build & run
+      - name: Copy compose & Nginx
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          source: |
+            docker-compose.yml
+            nginx.conf
+          target: "/home/${{ secrets.SERVER_USER }}/wanderlust"
+          overwrite: true
 
-    # ✅ Slack Success Notification
-    - name: Send Slack notification on success
-      if: success()
-      uses: slackapi/slack-github-action@v1.26.0
-      with:
-        payload: |
-          {
-            "text": "✅ Wanderlust Deployment Successful! 🚀",
-            "attachments": [
-              {
-                "color": "good",
-                "fields": [
-                  { "title": "Branch", "value": "${{ github.ref_name }}", "short": true },
-                  { "title": "Commit", "value": "<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>", "short": true },
-                  { "title": "Author", "value": "${{ github.actor }}", "short": true }
-                ]
-              }
-            ]
-          }
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      # Copy app sources (backend & frontend) so server can build images locally
+      - name: Copy backend & frontend sources
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          source: |
+            backend/**
+            frontend/**
+          target: "/home/${{ secrets.SERVER_USER }}/wanderlust"
+          overwrite: true
 
-    # ❌ Slack Failure Notification
-    - name: Send Slack notification on failure
-      if: failure()
-      uses: slackapi/slack-github-action@v1.26.0
-      with:
-        payload: |
-          {
-            "text": "❌ Wanderlust Deployment Failed!",
-            "attachments": [
-              {
-                "color": "danger",
-                "text": "Please check logs in GitHub Actions."
-              }
-            ]
-          }
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      # Deploy on server: login to Docker Hub (for base images), then build & up
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            set -euo pipefail
+            cd "/home/${{ secrets.SERVER_USER }}/wanderlust"
+
+            # Login to Docker Hub for base images (nginx/mongo/redis) & any private pulls
+            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME || 'emon110852' }}" --password-stdin || true
+
+            # Pull base images (optional but helps avoid old layers)
+            docker pull nginx:alpine || true
+            docker pull mongo:7 || true
+            docker pull redis:7-alpine || true
+
+            # Compose plugin or legacy docker-compose
+            if docker compose version >/dev/null 2>&1; then
+              COMPOSE="docker compose"
+            else
+              COMPOSE="docker-compose"
+            fi
+
+            # Stop old stack and rebuild backend/frontend from Dockerfiles
+            $COMPOSE down || true
+            $COMPOSE up -d --build --remove-orphans
+
+            # Clean dangling images
+            docker image prune -af || true
+
+            # Show status
+            $COMPOSE ps
+
+      # Health check via Nginx on port 80
+      - name: Health check
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            echo "Waiting for services to start..."
+            sleep 15
+
+            # Hit the API through Nginx
+            if curl -fsS http://localhost/api/health; then
+              echo "✓ Deployment successful!"
+            else
+              echo "✗ Health check failed"
+              (docker compose -f "/home/${{ secrets.SERVER_USER }}/wanderlust/docker-compose.yml" logs --tail=100) || true
+              exit 1
+            fi
