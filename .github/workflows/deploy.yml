@@ -5,6 +5,9 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+env:
+  DOCKER_USERNAME: emon110852
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -13,46 +16,49 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Optional: validate compose syntax locally before copying
-      - name: Validate Compose file
+      - name: Validate Compose syntax (local)
         run: |
           docker --version
           docker compose version || true
           docker compose config -q
 
-      # Ensure target directory exists (user-writable path avoids /opt permission issues)
+      # Ensure server path (home dir) avoids /opt permission issues
       - name: Prepare server directory
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.SERVER_HOST }}            # plain IP/hostname (e.g., 47.129.14.241)
-          username: ${{ secrets.SERVER_USER }}        # e.g., ubuntu
-          key: ${{ secrets.SERVER_SSH_KEY }}          # private key content
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}           # e.g., ubuntu
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE || '' }}
           port: ${{ secrets.SERVER_PORT || 22 }}
           script: |
             set -e
             mkdir -p "/home/${{ secrets.SERVER_USER }}/wanderlust"
 
-      # Copy only what the server needs to build & run
-      - name: Copy compose & Nginx
+      # Copy Compose and Nginx
+      - name: Copy compose & nginx.conf
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+          passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE || '' }}
           port: ${{ secrets.SERVER_PORT || 22 }}
           source: |
             docker-compose.yml
             nginx.conf
           target: "/home/${{ secrets.SERVER_USER }}/wanderlust"
           overwrite: true
+          strip_components: 0
 
-      # Copy app sources (backend & frontend) so server can build images locally
+      # Copy backend & frontend sources so server can build locally
       - name: Copy backend & frontend sources
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+          passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE || '' }}
           port: ${{ secrets.SERVER_PORT || 22 }}
           source: |
             backend/**
@@ -60,60 +66,45 @@ jobs:
           target: "/home/${{ secrets.SERVER_USER }}/wanderlust"
           overwrite: true
 
-      # Deploy on server: login to Docker Hub (for base images), then build & up
-      - name: Deploy on server
+      - name: Deploy on server (compose build & up)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+          passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE || '' }}
           port: ${{ secrets.SERVER_PORT || 22 }}
           script: |
             set -euo pipefail
             cd "/home/${{ secrets.SERVER_USER }}/wanderlust"
 
-            # Login to Docker Hub for base images (nginx/mongo/redis) & any private pulls
-            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME || 'emon110852' }}" --password-stdin || true
+            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin || true
 
-            # Pull base images (optional but helps avoid old layers)
             docker pull nginx:alpine || true
             docker pull mongo:7 || true
             docker pull redis:7-alpine || true
 
-            # Compose plugin or legacy docker-compose
             if docker compose version >/dev/null 2>&1; then
               COMPOSE="docker compose"
             else
               COMPOSE="docker-compose"
             fi
 
-            # Stop old stack and rebuild backend/frontend from Dockerfiles
             $COMPOSE down || true
             $COMPOSE up -d --build --remove-orphans
 
-            # Clean dangling images
             docker image prune -af || true
-
-            # Show status
             $COMPOSE ps
 
-      # Health check via Nginx on port 80
-      - name: Health check
+      - name: Health check (via Nginx)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+          passphrase: ${{ secrets.SERVER_SSH_PASSPHRASE || '' }}
           port: ${{ secrets.SERVER_PORT || 22 }}
           script: |
             echo "Waiting for services to start..."
             sleep 15
-
-            # Hit the API through Nginx
-            if curl -fsS http://localhost/api/health; then
-              echo "✓ Deployment successful!"
-            else
-              echo "✗ Health check failed"
-              (docker compose -f "/home/${{ secrets.SERVER_USER }}/wanderlust/docker-compose.yml" logs --tail=100) || true
-              exit 1
-            fi
+            curl -fsS http://localhost/api/health && echo "✓ Deployment OK" || (echo "✗ Health failed"; exit 1)
