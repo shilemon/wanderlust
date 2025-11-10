@@ -25,9 +25,6 @@ jobs:
       with:
         node-version: '18'
         cache: 'npm'
-        cache-dependency-path: |
-          backend/package-lock.json
-          frontend/package-lock.json
     
     - name: Install backend dependencies
       working-directory: ./backend
@@ -126,23 +123,12 @@ jobs:
         script: |
           cd /opt/wanderlust
           
-          # Login to Docker Hub
           echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
-          
-          # Pull latest images
           docker pull ${{ env.BACKEND_IMAGE }}:latest
           docker pull ${{ env.FRONTEND_IMAGE }}:latest
-          
-          # Stop and remove old containers
           docker-compose down
-          
-          # Start new containers with latest images
           docker-compose up -d
-          
-          # Clean up old images
           docker image prune -af
-          
-          # Show status
           docker-compose ps
     
     - name: Health check
@@ -156,13 +142,11 @@ jobs:
           echo "Waiting for services to start..."
           sleep 15
           
-          # Check if containers are running
           if [ $(docker-compose -f /opt/wanderlust/docker-compose.yml ps -q | wc -l) -eq 0 ]; then
             echo "No containers are running!"
             exit 1
           fi
           
-          # Health check
           if curl -f http://localhost/api/health 2>/dev/null; then
             echo "✓ Deployment successful!"
           else
@@ -172,20 +156,20 @@ jobs:
           fi
 
     # ✅ Slack Notification (Success)
-    - name: Send Slack Notification
+    - name: Send Slack Success Notification
       if: success()
       uses: slackapi/slack-github-action@v1.27.0
       with:
         payload: |
           {
-            "text": ":rocket: *Wanderlust Deployment Successful!*",
+            "text": ":rocket: *Wanderlust Deployment Successful!* :tada:",
             "attachments": [
               {
                 "color": "good",
                 "fields": [
                   { "title": "Branch", "value": "${{ github.ref_name }}", "short": true },
                   { "title": "Commit", "value": "<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>", "short": true },
-                  { "title": "Environment", "value": "Production", "short": true }
+                  { "title": "Status", "value": "✅ Success", "short": true }
                 ]
               }
             ]
@@ -204,7 +188,7 @@ jobs:
             "attachments": [
               {
                 "color": "danger",
-                "text": "Check the GitHub Actions logs for details."
+                "text": "Check GitHub Actions logs for details."
               }
             ]
           }
