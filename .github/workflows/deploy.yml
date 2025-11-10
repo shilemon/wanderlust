@@ -20,17 +20,25 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # ✅ Set up Node.js for Backend
+    # ✅ Setup Node.js for Backend (safe cache)
     - name: Set up Node.js (backend)
       uses: actions/setup-node@v4
       with:
         node-version: 18
         cache: 'npm'
-        cache-dependency-path: backend/package-lock.json
+        # This won't fail if file is missing
+        cache-dependency-path: |
+          backend/package-lock.json
+          backend/package.json
 
     - name: Install backend dependencies
       working-directory: ./backend
-      run: npm ci
+      run: |
+        if [ -f package-lock.json ]; then
+          npm ci
+        else
+          npm install
+        fi
 
     - name: Run backend tests
       working-directory: ./backend
@@ -40,17 +48,24 @@ jobs:
       working-directory: ./backend
       run: npm run lint --if-present
 
-    # ✅ Set up Node.js for Frontend
+    # ✅ Setup Node.js for Frontend (safe cache)
     - name: Set up Node.js (frontend)
       uses: actions/setup-node@v4
       with:
         node-version: 18
         cache: 'npm'
-        cache-dependency-path: frontend/package-lock.json
+        cache-dependency-path: |
+          frontend/package-lock.json
+          frontend/package.json
 
     - name: Install frontend dependencies
       working-directory: ./frontend
-      run: npm ci
+      run: |
+        if [ -f package-lock.json ]; then
+          npm ci
+        else
+          npm install
+        fi
 
     - name: Run frontend tests
       working-directory: ./frontend
