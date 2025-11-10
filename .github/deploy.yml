@@ -183,7 +183,8 @@ jobs:
                 "type": "header",
                 "text": {
                   "type": "plain_text",
-                  "text": "✅ Deployment Successful!"
+                  "text": "✅ Deployment Successful!",
+                  "emoji": true
                 }
               },
               {
@@ -245,7 +246,8 @@ jobs:
                 "type": "header",
                 "text": {
                   "type": "plain_text",
-                  "text": "❌ Deployment Failed!"
+                  "text": "❌ Deployment Failed!",
+                  "emoji": true
                 }
               },
               {
