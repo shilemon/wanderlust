@@ -24,40 +24,18 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '18'
-    
-    - name: Cache backend dependencies
-      uses: actions/cache@v3
-      with:
-        path: backend/node_modules
-        key: ${{ runner.os }}-backend-${{ hashFiles('backend/package-lock.json') }}
-        restore-keys: |
-          ${{ runner.os }}-backend-
-    
-    - name: Cache frontend dependencies
-      uses: actions/cache@v3
-      with:
-        path: frontend/node_modules
-        key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-        restore-keys: |
-          ${{ runner.os }}-frontend-
+        cache: 'npm'
+        cache-dependency-path: |
+          backend/package-lock.json
+          frontend/package-lock.json
     
     - name: Install backend dependencies
       working-directory: ./backend
-      run: |
-        if [ -f package-lock.json ]; then
-          npm ci
-        else
-          npm install
-        fi
+      run: npm ci
     
     - name: Install frontend dependencies
       working-directory: ./frontend
-      run: |
-        if [ -f package-lock.json ]; then
-          npm ci
-        else
-          npm install
-        fi
+      run: npm ci
     
     - name: Run backend tests
       working-directory: ./backend
@@ -128,22 +106,6 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Test SSH connection
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.SERVER_HOST }}
-        username: ${{ secrets.SERVER_USER }}
-        key: ${{ secrets.SERVER_SSH_KEY }}
-        port: ${{ secrets.SERVER_PORT || 22 }}
-        command_timeout: 30m
-        script: |
-          echo "✓ SSH connection successful"
-          echo "Server: $(hostname)"
-          echo "User: $(whoami)"
-          echo "Creating deployment directory..."
-          sudo mkdir -p /opt/wanderlust
-          sudo chown $(whoami):$(whoami) /opt/wanderlust
-    
     - name: Copy files to server
       uses: appleboy/scp-action@v0.1.7
       with:
@@ -153,8 +115,6 @@ jobs:
         port: ${{ secrets.SERVER_PORT || 22 }}
         source: "docker-compose.yml,nginx.conf"
         target: "/opt/wanderlust"
-        timeout: 30s
-        command_timeout: 10m
     
     - name: Deploy application
       uses: appleboy/ssh-action@v1.0.3
@@ -163,27 +123,26 @@ jobs:
         username: ${{ secrets.SERVER_USER }}
         key: ${{ secrets.SERVER_SSH_KEY }}
         port: ${{ secrets.SERVER_PORT || 22 }}
-        command_timeout: 30m
         script: |
           cd /opt/wanderlust
           
-          echo "Logging into Docker Hub..."
+          # Login to Docker Hub
           echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
           
-          echo "Pulling latest images..."
+          # Pull latest images
           docker pull ${{ env.BACKEND_IMAGE }}:latest
           docker pull ${{ env.FRONTEND_IMAGE }}:latest
           
-          echo "Stopping old containers..."
-          docker-compose down || true
+          # Stop and remove old containers
+          docker-compose down
           
-          echo "Starting new containers..."
+          # Start new containers with latest images
           docker-compose up -d
           
-          echo "Cleaning up old images..."
+          # Clean up old images
           docker image prune -af
           
-          echo "Container status:"
+          # Show status
           docker-compose ps
     
     - name: Health check
@@ -193,39 +152,24 @@ jobs:
         username: ${{ secrets.SERVER_USER }}
         key: ${{ secrets.SERVER_SSH_KEY }}
         port: ${{ secrets.SERVER_PORT || 22 }}
-        command_timeout: 30m
         script: |
           echo "Waiting for services to start..."
           sleep 15
           
           # Check if containers are running
-          CONTAINER_COUNT=$(docker-compose -f /opt/wanderlust/docker-compose.yml ps -q | wc -l)
-          if [ $CONTAINER_COUNT -eq 0 ]; then
-            echo "❌ No containers are running!"
-            docker-compose -f /opt/wanderlust/docker-compose.yml logs --tail=50
+          if [ $(docker-compose -f /opt/wanderlust/docker-compose.yml ps -q | wc -l) -eq 0 ]; then
+            echo "No containers are running!"
             exit 1
           fi
           
-          echo "Found $CONTAINER_COUNT running container(s)"
-          
-          # Health check with retries
-          MAX_RETRIES=5
-          RETRY_COUNT=0
-          
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if curl -f http://localhost/api/health 2>/dev/null; then
-              echo "✅ Deployment successful! Health check passed."
-              exit 0
-            else
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-              echo "⏳ Health check attempt $RETRY_COUNT/$MAX_RETRIES failed. Retrying in 10s..."
-              sleep 10
-            fi
-          done
-          
-          echo "❌ Health check failed after $MAX_RETRIES attempts"
-          docker-compose -f /opt/wanderlust/docker-compose.yml logs --tail=100
-          exit 1
+          # Health check
+          if curl -f http://localhost/api/health 2>/dev/null; then
+            echo "✓ Deployment successful!"
+          else
+            echo "✗ Health check failed"
+            docker-compose -f /opt/wanderlust/docker-compose.yml logs --tail=50
+            exit 1
+          fi
     
     - name: Send Slack notification on success
       if: success()
@@ -256,19 +200,11 @@ jobs:
                   },
                   {
                     "type": "mrkdwn",
-                    "text": "*Commit:*\n<${{ github.event.head_commit.url }}|`${{ github.sha }}`>"
+                    "text": "*Commit:*\n<${{ github.event.head_commit.url }}|${{ github.sha }}>"
                   },
                   {
                     "type": "mrkdwn",
                     "text": "*Author:*\n${{ github.actor }}"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Environment:*\nProduction"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Workflow:*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_number }}>"
                   }
                 ]
               },
@@ -276,17 +212,8 @@ jobs:
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "*Commit Message:*\n```${{ github.event.head_commit.message }}```"
+                  "text": "*Commit Message:*\n${{ github.event.head_commit.message }}"
                 }
-              },
-              {
-                "type": "context",
-                "elements": [
-                  {
-                    "type": "mrkdwn",
-                    "text": "🚀 Deployed at <!date^${{ github.event.head_commit.timestamp }}^{date_num} {time_secs}|now>"
-                  }
-                ]
               },
               {
                 "type": "actions",
@@ -295,20 +222,9 @@ jobs:
                     "type": "button",
                     "text": {
                       "type": "plain_text",
-                      "text": "View Workflow",
-                      "emoji": true
+                      "text": "View Workflow"
                     },
-                    "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-                    "style": "primary"
-                  },
-                  {
-                    "type": "button",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "View Commit",
-                      "emoji": true
-                    },
-                    "url": "${{ github.event.head_commit.url }}"
+                    "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
                   }
                 ]
               }
@@ -347,19 +263,11 @@ jobs:
                   },
                   {
                     "type": "mrkdwn",
-                    "text": "*Commit:*\n<${{ github.event.head_commit.url }}|`${{ github.sha }}`>"
+                    "text": "*Commit:*\n<${{ github.event.head_commit.url }}|${{ github.sha }}>"
                   },
                   {
                     "type": "mrkdwn",
                     "text": "*Author:*\n${{ github.actor }}"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Environment:*\nProduction"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Workflow:*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_number }}>"
                   }
                 ]
               },
@@ -367,24 +275,8 @@ jobs:
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "*Commit Message:*\n```${{ github.event.head_commit.message }}```"
+                  "text": "*Commit Message:*\n${{ github.event.head_commit.message }}"
                 }
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "⚠️ *Action Required:* Please check the workflow logs to identify and fix the issue."
-                }
-              },
-              {
-                "type": "context",
-                "elements": [
-                  {
-                    "type": "mrkdwn",
-                    "text": "💥 Failed at <!date^${{ github.event.head_commit.timestamp }}^{date_num} {time_secs}|now>"
-                  }
-                ]
               },
               {
                 "type": "actions",
@@ -393,20 +285,10 @@ jobs:
                     "type": "button",
                     "text": {
                       "type": "plain_text",
-                      "text": "View Workflow Logs",
-                      "emoji": true
+                      "text": "View Workflow"
                     },
                     "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
                     "style": "danger"
-                  },
-                  {
-                    "type": "button",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "View Commit",
-                      "emoji": true
-                    },
-                    "url": "${{ github.event.head_commit.url }}"
                   }
                 ]
               }
