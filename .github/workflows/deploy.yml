@@ -15,47 +15,62 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
-
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
-    # ✅ Set up Node.js separately for backend
-    - name: Set up Node.js (backend)
+    
+    - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '18'
-        cache: 'npm'
-        cache-dependency-path: backend/package-lock.json
-
+    
+    - name: Cache backend dependencies
+      uses: actions/cache@v3
+      with:
+        path: backend/node_modules
+        key: ${{ runner.os }}-backend-${{ hashFiles('backend/package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-backend-
+    
+    - name: Cache frontend dependencies
+      uses: actions/cache@v3
+      with:
+        path: frontend/node_modules
+        key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-frontend-
+    
     - name: Install backend dependencies
       working-directory: ./backend
-      run: npm ci
-
+      run: |
+        if [ -f package-lock.json ]; then
+          npm ci
+        else
+          npm install
+        fi
+    
+    - name: Install frontend dependencies
+      working-directory: ./frontend
+      run: |
+        if [ -f package-lock.json ]; then
+          npm ci
+        else
+          npm install
+        fi
+    
     - name: Run backend tests
       working-directory: ./backend
       run: npm test --if-present
-
-    - name: Lint backend
-      working-directory: ./backend
-      run: npm run lint --if-present
-
-    # ✅ Set up Node.js separately for frontend
-    - name: Set up Node.js (frontend)
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'npm'
-        cache-dependency-path: frontend/package-lock.json
-
-    - name: Install frontend dependencies
-      working-directory: ./frontend
-      run: npm ci
-
+    
     - name: Run frontend tests
       working-directory: ./frontend
       run: npm test --if-present
-
+    
+    - name: Lint backend
+      working-directory: ./backend
+      run: npm run lint --if-present
+    
     - name: Lint frontend
       working-directory: ./frontend
       run: npm run lint --if-present
@@ -65,20 +80,20 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
+    
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
-
+    
     - name: Login to Docker Hub
       uses: docker/login-action@v3
       with:
         username: ${{ env.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
-
+    
     - name: Build and push backend image
       uses: docker/build-push-action@v5
       with:
@@ -90,7 +105,7 @@ jobs:
           ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
         cache-from: type=registry,ref=${{ env.BACKEND_IMAGE }}:latest
         cache-to: type=inline
-
+    
     - name: Build and push frontend image
       uses: docker/build-push-action@v5
       with:
@@ -108,11 +123,27 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-push
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
+    
+    - name: Test SSH connection
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        port: ${{ secrets.SERVER_PORT || 22 }}
+        command_timeout: 30m
+        script: |
+          echo "✓ SSH connection successful"
+          echo "Server: $(hostname)"
+          echo "User: $(whoami)"
+          echo "Creating deployment directory..."
+          sudo mkdir -p /opt/wanderlust
+          sudo chown $(whoami):$(whoami) /opt/wanderlust
+    
     - name: Copy files to server
       uses: appleboy/scp-action@v0.1.7
       with:
@@ -122,7 +153,9 @@ jobs:
         port: ${{ secrets.SERVER_PORT || 22 }}
         source: "docker-compose.yml,nginx.conf"
         target: "/opt/wanderlust"
-
+        timeout: 30s
+        command_timeout: 10m
+    
     - name: Deploy application
       uses: appleboy/ssh-action@v1.0.3
       with:
@@ -130,16 +163,29 @@ jobs:
         username: ${{ secrets.SERVER_USER }}
         key: ${{ secrets.SERVER_SSH_KEY }}
         port: ${{ secrets.SERVER_PORT || 22 }}
+        command_timeout: 30m
         script: |
           cd /opt/wanderlust
+          
+          echo "Logging into Docker Hub..."
           echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
+          
+          echo "Pulling latest images..."
           docker pull ${{ env.BACKEND_IMAGE }}:latest
           docker pull ${{ env.FRONTEND_IMAGE }}:latest
-          docker-compose down
+          
+          echo "Stopping old containers..."
+          docker-compose down || true
+          
+          echo "Starting new containers..."
           docker-compose up -d
+          
+          echo "Cleaning up old images..."
           docker image prune -af
+          
+          echo "Container status:"
           docker-compose ps
-
+    
     - name: Health check
       uses: appleboy/ssh-action@v1.0.3
       with:
@@ -147,57 +193,225 @@ jobs:
         username: ${{ secrets.SERVER_USER }}
         key: ${{ secrets.SERVER_SSH_KEY }}
         port: ${{ secrets.SERVER_PORT || 22 }}
+        command_timeout: 30m
         script: |
           echo "Waiting for services to start..."
           sleep 15
-          if [ $(docker-compose -f /opt/wanderlust/docker-compose.yml ps -q | wc -l) -eq 0 ]; then
-            echo "No containers are running!"
-            exit 1
-          fi
-          if curl -f http://localhost/api/health 2>/dev/null; then
-            echo "✓ Deployment successful!"
-          else
-            echo "✗ Health check failed"
+          
+          # Check if containers are running
+          CONTAINER_COUNT=$(docker-compose -f /opt/wanderlust/docker-compose.yml ps -q | wc -l)
+          if [ $CONTAINER_COUNT -eq 0 ]; then
+            echo "❌ No containers are running!"
             docker-compose -f /opt/wanderlust/docker-compose.yml logs --tail=50
             exit 1
           fi
-
-    # ✅ Slack Notification (Success)
-    - name: Send Slack Success Notification
+          
+          echo "Found $CONTAINER_COUNT running container(s)"
+          
+          # Health check with retries
+          MAX_RETRIES=5
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if curl -f http://localhost/api/health 2>/dev/null; then
+              echo "✅ Deployment successful! Health check passed."
+              exit 0
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              echo "⏳ Health check attempt $RETRY_COUNT/$MAX_RETRIES failed. Retrying in 10s..."
+              sleep 10
+            fi
+          done
+          
+          echo "❌ Health check failed after $MAX_RETRIES attempts"
+          docker-compose -f /opt/wanderlust/docker-compose.yml logs --tail=100
+          exit 1
+    
+    - name: Send Slack notification on success
       if: success()
-      uses: slackapi/slack-github-action@v1.27.0
+      uses: slackapi/slack-github-action@v1.26.0
       with:
         payload: |
           {
-            "text": ":rocket: *Wanderlust Deployment Successful!* :tada:",
-            "attachments": [
+            "text": "✅ Deployment Successful!",
+            "blocks": [
               {
-                "color": "good",
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "✅ Deployment Successful!",
+                  "emoji": true
+                }
+              },
+              {
+                "type": "section",
                 "fields": [
-                  { "title": "Branch", "value": "${{ github.ref_name }}", "short": true },
-                  { "title": "Commit", "value": "<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>", "short": true },
-                  { "title": "Status", "value": "✅ Success", "short": true }
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Repository:*\n${{ github.repository }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Branch:*\n${{ github.ref_name }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Commit:*\n<${{ github.event.head_commit.url }}|`${{ github.sha }}`>"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Author:*\n${{ github.actor }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Environment:*\nProduction"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Workflow:*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_number }}>"
+                  }
+                ]
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Commit Message:*\n```${{ github.event.head_commit.message }}```"
+                }
+              },
+              {
+                "type": "context",
+                "elements": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "🚀 Deployed at <!date^${{ github.event.head_commit.timestamp }}^{date_num} {time_secs}|now>"
+                  }
+                ]
+              },
+              {
+                "type": "actions",
+                "elements": [
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "View Workflow",
+                      "emoji": true
+                    },
+                    "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                    "style": "primary"
+                  },
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "View Commit",
+                      "emoji": true
+                    },
+                    "url": "${{ github.event.head_commit.url }}"
+                  }
                 ]
               }
             ]
           }
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-    # ❌ Slack Notification (Failure)
-    - name: Send Slack Failure Notification
+        SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+    
+    - name: Send Slack notification on failure
       if: failure()
-      uses: slackapi/slack-github-action@v1.27.0
+      uses: slackapi/slack-github-action@v1.26.0
       with:
         payload: |
           {
-            "text": ":x: *Wanderlust Deployment Failed!*",
-            "attachments": [
+            "text": "❌ Deployment Failed!",
+            "blocks": [
               {
-                "color": "danger",
-                "text": "Check GitHub Actions logs for details."
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "❌ Deployment Failed!",
+                  "emoji": true
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Repository:*\n${{ github.repository }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Branch:*\n${{ github.ref_name }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Commit:*\n<${{ github.event.head_commit.url }}|`${{ github.sha }}`>"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Author:*\n${{ github.actor }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Environment:*\nProduction"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Workflow:*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_number }}>"
+                  }
+                ]
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Commit Message:*\n```${{ github.event.head_commit.message }}```"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "⚠️ *Action Required:* Please check the workflow logs to identify and fix the issue."
+                }
+              },
+              {
+                "type": "context",
+                "elements": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "💥 Failed at <!date^${{ github.event.head_commit.timestamp }}^{date_num} {time_secs}|now>"
+                  }
+                ]
+              },
+              {
+                "type": "actions",
+                "elements": [
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "View Workflow Logs",
+                      "emoji": true
+                    },
+                    "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                    "style": "danger"
+                  },
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "View Commit",
+                      "emoji": true
+                    },
+                    "url": "${{ github.event.head_commit.url }}"
+                  }
+                ]
               }
             ]
           }
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
