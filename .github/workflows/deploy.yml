@@ -8,7 +8,7 @@ on:
 
 env:
   DOCKER_USERNAME: emon110852
-  BACKEND_IMAGE: emon110852/wanderlust-backend
+  BACKEND_IMAGE: emon110852/backend-wanderlust
   FRONTEND_IMAGE: emon110852/frontend-wanderlust
 
 jobs:
