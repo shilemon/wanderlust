@@ -1,5 +1,6 @@
 # Use the official Node.js 25 image as the base
-FROM node:25
+#stage 1
+FROM node:25 As backend-builder
 
 # Set the working directory inside the container
 WORKDIR /app
@@ -10,6 +11,14 @@ COPY . .
 # Install project dependencies using npm
 RUN npm i
 
+
+#Stage 2
+FROM node:25-slim
+
+WORKDIR /app
+
+#copy the above stage as compressed
+COPY --from=backend-builder /app .
 # Copy the sample environment file and rename it to .env
 COPY .env.sample .env
 
