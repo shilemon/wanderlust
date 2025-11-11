@@ -1,13 +1,26 @@
-Setup Kubernetes [Kubeadm] Cluster (Version: 1.29)
-On both master & worker nodes
-Become root user
+##  Setup Kubernetes [Kubeadm] Cluster (Version: 1.29)
+
+### On both master & worker nodes
+- <i>  Become root user </i>
+```bash
 sudo su
-Updating System Packages
+```
+
+- <i>  Updating System Packages </i>
+```bash
 sudo apt-get update
-Installing Docker
+```
+
+- <i> Installing Docker </i>
+```bash
 sudo apt install docker.io -y
+```
+```bash
 sudo chmod 777 /var/run/docker.sock
-Create a shell script 1.sh and paste the below code and run it :
+```
+
+- <i> Create a shell script 1.sh and paste the below code and run it :
+```bash
 #!/bin/bash
 # disable swap
 sudo swapoff -a
@@ -58,8 +71,11 @@ sudo apt-get install -y jq
 
 sudo systemctl enable --now kubelet
 sudo systemctl start kubelet
-On Master node
-Create a shell script 2.sh and paste the below code and run it
+```
+
+### On Master node
+- <i> Create a shell script 2.sh and paste the below code and run it </i>
+```bash
 sudo kubeadm config images pull
 
 sudo kubeadm init
@@ -73,6 +89,13 @@ sudo chown "$(id -u)":"$(id -g)" "$HOME"/.kube/config
 kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.0/manifests/calico.yaml
 
 kubeadm token create --print-join-command
-On Worker node
-Paste the join command you got from the master node and append --v=5 at the end
+```
+
+### On Worker node
+- <i> Paste the join command you got from the master node and append --v=5 at the end </i>
+
+```bash
 <join-command> --v=5
+```
+
+
