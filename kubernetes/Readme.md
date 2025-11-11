@@ -171,4 +171,5 @@ kubectl logs <pod-name>
 20) Navigate to chrome and access your application at 31000 port :
 ```bash
 http://<your-workernode-publicip>:31000/
-<img width="1911" height="807" alt="image" src="https://github.com/user-attachments/assets/b2fb7d25-5f2f-4f24-82d5-b577771d9dd9" />
+
+<img width="1919" height="845" alt="Screenshot 2025-11-11 221158" src="https://github.com/user-attachments/assets/a819b43f-1171-4f6b-8fcd-7214dd8e5b00" />
