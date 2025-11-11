@@ -25,7 +25,6 @@ git clone https://github.com/shilemon/wanderlust.git
 ```bash
 kubectl get nodes
 ```
-<img width="576" height="60" alt="nodes" src="https://github.com/user-attachments/assets/692a45ae-aff6-4062-ae27-eaff12eeedfb" />
 
 
 #
@@ -33,14 +32,12 @@ kubectl get nodes
 ```bash
 kubectl create namespace wanderlust
 ```
-<img width="722" height="59" alt="namespace create" src="https://github.com/user-attachments/assets/609cbdc4-4425-4e86-9f6c-ed25d2c9c475" />
 
 #
 5) Update kubernetes config context : 
 ```bash
 kubectl config set-context --current --namespace wanderlust
 ```
-<img width="926" height="30" alt="context wanderlust" src="https://github.com/user-attachments/assets/335a776d-135b-4d79-ae38-44c64ebac6ab" />
 
 #
 6) Enable DNS resolution on kubernetes cluster :
@@ -50,7 +47,6 @@ kubectl config set-context --current --namespace wanderlust
 ```bash
 kubectl get pods -n kube-system -o wide | grep -i core
 ```
-<img width="843" height="76" alt="get-coredns" src="https://github.com/user-attachments/assets/6bcdf8a1-5baa-4176-a6e5-d9e139cf96a9" />
 
 - Above step will run coredns pod on worker node as well for DNS resolution
 
@@ -59,7 +55,6 @@ kubectl edit deploy coredns -n kube-system -o yaml
 ```
 <i> Make replica count from 2 to 4 </i>
 
-<img width="847" height="527" alt="edit-coredns" src="https://github.com/user-attachments/assets/f0022554-be6b-4fd6-ba38-97849b012b72" />
 
 #
 7) Navigate to frontend directory :
@@ -72,14 +67,12 @@ cd frontend
 ```bash
 vi .env.docker
 ```
-<img width="377" height="22" alt="frontend env docker" src="https://github.com/user-attachments/assets/e82f19fa-4d2f-4a30-8c49-9797e9e89028" />
 
 #
 9) Build frontend docker image : 
 ```bash
-docker build -t madhupdevops/frontend-wanderlust:v2.1.8 .
+docker build -t emon110852/frontend-wanderlust:latest .
 ```
-<img width="890" height="416" alt="docker frontend build" src="https://github.com/user-attachments/assets/8f542a1a-484f-4d6c-b134-b9a6af5877f4" />
 
 #
 10) Navigate to backend directory :
@@ -96,21 +89,18 @@ cd ../backend/
 
 > Note: To get service names, check <u>mongodb.yaml, redis.yaml</u>
 
-<img width="779" height="221" alt="backend env docker" src="https://github.com/user-attachments/assets/8d008c94-713b-486c-88c5-36efb3db7511" />
 
 #
 12) Build backend docker image : 
 ```bash
-docker build -t madhupdevops/backend-wanderlust:v2.1.8 .
+docker build -t emon110852/backend-wanderlust:latest .
 ```
-![Backend dockerfile](https://github.com/DevMadhup/wanderlust/blob/devops/kubernetes/assets/docker%20backend%20build.png)
 
 #
 13) Check docker images:
 ```bash
 docker images
 ```
-![docker images](https://github.com/DevMadhup/wanderlust/blob/devops/kubernetes/assets/docker%20images.png)
 
 #
 14) Login to DockerHub and push image to DockerHub
